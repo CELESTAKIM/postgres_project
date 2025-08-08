@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kenya GIS Portal - KJ Hub</title>
+
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"/>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+
+<link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css"/>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+<style>
+  body, html { height: 100%; margin: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;}
+  #map { height: 100vh; }
+  .sidebar {
+    background-color: #f9f9f9;
+    overflow-y: auto;
+    height: 100vh;
+    border-right: 1px solid #ddd;
+    padding: 10px;
+    box-shadow: 2px 0 5px rgba(0,0,0,0.1);
+  }
+  .layer-card {
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    margin-bottom: 12px;
+    padding: 8px 12px;
+    box-shadow: 0 2px 6px rgb(0 0 0 / 0.1);
+    transition: all 0.2s ease-in-out;
+  }
+  .layer-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgb(0 0 0 / 0.2);
+  }
+  .color-input {
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 1px solid #ccc;
+    cursor: pointer;
+  }
+  .btn-group-custom { gap: 5px; }
+  #layersList, #tableArea {
+    max-height: 45vh;
+    overflow-y: auto;
+  }
+  .highlight-feature {
+    color: yellow !important;
+    fillColor: yellow !important;
+    fillOpacity: 1 !important;
+    weight: 4 !important;
+  }
+  .selected-row {
+    background-color: #ffe066 !important;
+  }
+  .loading-message {
+    text-align: center;
+    padding: 20px;
+    color: #555;
+    font-style: italic;
+  }
+  .dt-head-left { text-align: left; }
+</style>
+</head>
+<body>
+
+<nav class="navbar navbar-expand-lg navbar-dark bg-primary sticky-top">
+  <div class="container-fluid">
+    <a class="navbar-brand" href="#">Kenya GIS Portal - KJ Hub</a>
+    <button class="btn btn-light btn-sm" id="uploadBtn" data-bs-toggle="modal" data-bs-target="#uploadModal">Upload Layer</button>
+  </div>
+</nav>
+
+<div class="container-fluid">
+  <div class="row g-0">
+    <div class="col-lg-4 sidebar">
+      <h5 class="mt-2">Available Layers</h5>
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <button id="mergeLayersBtn" class="btn btn-info btn-sm">Merge Selected</button>
+        <button id="refreshLayersBtn" class="btn btn-secondary btn-sm"><i class="fas fa-sync-alt"></i></button>
+      </div>
+      <div id="layersList">
+        <p class="loading-message">Loading... KJ by Kimathi Joram Hub</p>
+      </div>
+      <hr />
+      <h5>Attribute Table</h5>
+      <div id="tableArea">
+        <p class="text-muted">Select a layer to view its data.</p>
+      </div>
+      <div class="mt-3 d-flex justify-content-center flex-wrap gap-2">
+        <button id="createSelectionLayerBtn" class="btn btn-warning btn-sm" disabled>Create Selection Layer</button>
+        <button id="downloadSelectionBtn" class="btn btn-success btn-sm" disabled>Download Selection</button>
+      </div>
+    </div>
+
+    <div class="col-lg-8 p-0">
+      <div id="map"></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="uploadModal" tabindex="-1" aria-labelledby="uploadModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <form id="uploadForm" enctype="multipart/form-data">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="uploadModalLabel">Upload Shapefile (zip)</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label for="shpFile" class="form-label">Choose zipped shapefile archive (.zip)</label>
+            <input class="form-control" type="file" id="shpFile" name="file" accept=".zip" required/>
+          </div>
+          <div class="mb-3">
+            <label for="tablename" class="form-label">New Layer Table Name</label>
+            <input class="form-control" type="text" id="tablename" name="tablename" placeholder="Use letters, digits, underscore only" required/>
+          </div>
+          <div id="uploadStatus" class="mt-2"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="submit" class="btn btn-primary">Upload</button>
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal fade" id="deleteModal" tabindex="-1" aria-labelledby="deleteModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header bg-danger text-white">
+        <h5 class="modal-title" id="deleteModalLabel">Confirm Deletion</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p>Are you sure you want to delete the layer '<span id="deleteLayerName"></span>'? This action cannot be undone.</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-danger" id="confirmDeleteBtn">Delete</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
+
+<script>
+  // Global state variables
+  const LAYERS_INITIAL = {{ layers | tojson }};
+  let LAYERS = {...LAYERS_INITIAL};
+  let leafletLayers = {};
+  let geojsonCache = {};
+  let activeLayerKey = null;
+  let selectedRows = {};
+  let highlightedFeatures = new Map();
+  let table = null;
+
+  // Initialize the Leaflet map
+  const map = L.map('map').setView([0.0236, 37.9062], 6);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+  // --- Utility Functions ---
+  function getLayerColor(key) {
+    return LAYERS[key]?.color || '#007bff';
+  }
+
+  function getLayerStyle(key, isHighlighted = false) {
+    const color = getLayerColor(key);
+    const type = LAYERS[key]?.type;
+    if (type === 'point') {
+      return {
+        radius: 6,
+        fillColor: isHighlighted ? '#FFFF00' : color,
+        color: '#000',
+        weight: isHighlighted ? 3 : 1,
+        opacity: 1,
+        fillOpacity: isHighlighted ? 1 : 0.9,
+      };
+    } else {
+      return {
+        color: isHighlighted ? '#FFFF00' : color,
+        weight: isHighlighted ? 4 : 2,
+        fillOpacity: isHighlighted ? 0.7 : 0.4,
+      };
+    }
+  }
+
+  function addLayerToMap(key, fitBounds = false) {
+    fetch(`/data/${key}`)
+      .then(r => r.json())
+      .then(geojson => {
+        if (geojson.error) {
+          console.warn("Layer fetch error", geojson.error);
+          return;
+        }
+        if (leafletLayers[key]) map.removeLayer(leafletLayers[key]);
+        
+        geojsonCache[key] = geojson;
+        let layer = L.geoJSON(geojson, {
+          style: feature => getLayerStyle(key),
+          pointToLayer: (feature, latlng) => L.circleMarker(latlng, getLayerStyle(key)),
+          onEachFeature: (feature, layer) => {
+            let props = feature.properties || {};
+            let popupContent = '<div>';
+            for (const [k,v] of Object.entries(props)) {
+              if (k !== '_rowid') {
+                popupContent += `<b>${k}</b>: ${v}<br>`;
+              }
+            }
+            popupContent += '</div>';
+            layer.bindPopup(popupContent);
+            layer.on('click', e => {
+              highlightFeature(key, e.target, feature.properties._rowid);
+              if (activeLayerKey === key) {
+                $('#attrTable tbody tr').removeClass('selected-row');
+                $(`#attrTable tbody tr[data-rowid='${feature.properties._rowid}']`).addClass('selected-row');
+              }
+            });
+          }
+        }).addTo(map);
+
+        leafletLayers[key] = layer;
+        if (fitBounds || Object.keys(leafletLayers).length === 1) {
+          map.fitBounds(layer.getBounds());
+        }
+      });
+  }
+
+  function highlightFeature(layerKey, layer, rowid) {
+    highlightedFeatures.forEach(h => {
+      h.layer.setStyle(getLayerStyle(h.layerKey));
+    });
+    highlightedFeatures.clear();
+
+    layer.setStyle(getLayerStyle(layerKey, true));
+    highlightedFeatures.set(rowid, { layerKey, layer });
+  }
+
+  function buildLayerList() {
+    const container = $('#layersList');
+    container.empty();
+
+    if (Object.keys(LAYERS).length === 0) {
+      container.html('<p class="loading-message">No layers available.</p>');
+      return;
+    }
+
+    Object.keys(LAYERS).forEach(key => {
+      let color = getLayerColor(key);
+      const card = $(`
+        <div class="layer-card">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <div>
+              <input type="checkbox" class="layer-toggle" data-key="${key}" checked />
+              <input type="checkbox" class="layer-merge-toggle ms-2" data-key="${key}" title="Select for merging"/>
+              <strong>${LAYERS[key].title}</strong>
+              <input type="color" class="form-control form-control-sm color-input ms-2" value="${color}" data-key="${key}" />
+            </div>
+            <div class="btn-group btn-group-sm">
+              <button class="btn btn-outline-secondary zoom-to-layer" data-key="${key}"><i class="fas fa-search-plus"></i></button>
+              <button class="btn btn-outline-primary view-attributes" data-key="${key}"><i class="fas fa-table"></i></button>
+              <button class="btn btn-danger delete-layer-btn" data-key="${key}" data-bs-toggle="modal" data-bs-target="#deleteModal"><i class="fas fa-trash"></i></button>
+            </div>
+          </div>
+        </div>
+      `);
+      container.append(card);
+    });
+  }
+
+  function loadAttributeTable(layerKey) {
+    $('#tableArea').html('<p class="text-center text-muted">Loading attributes...</p>');
+    selectedRows[layerKey] = new Set();
+    $('#createSelectionLayerBtn, #downloadSelectionBtn').prop('disabled', true);
+
+    $.getJSON(`/attributes/${layerKey}`, function(data) {
+      if (data.error) {
+        $('#tableArea').html('<div class="alert alert-danger">Failed to load attributes: '+data.error+'</div>');
+        return;
+      }
+      
+      let columns = data.columns.filter(col => col !== '_rowid');
+      let rows = data.rows;
+
+      if (table) table.destroy();
+
+      let html = `<table id="attrTable" class="table table-striped table-bordered table-sm" style="width:100%">
+        <thead><tr><th><input type="checkbox" id="selectAll"/></th>`;
+      columns.forEach(col => {
+        html += `<th class="dt-head-left">${col}</th>`;
+      });
+      html += '</tr></thead><tbody>';
+
+      rows.forEach(row => {
+        html += `<tr data-rowid="${row._rowid}"><td><input type="checkbox" class="row-select"/></td>`;
+        columns.forEach(col => {
+          html += `<td>${row[col]}</td>`;
+        });
+        html += '</tr>';
+      });
+
+      html += '</tbody></table>';
+      $('#tableArea').html(html);
+
+      table = $('#attrTable').DataTable({
+        scrollY: "300px",
+        scrollCollapse: true,
+        paging: false,
+        info: false,
+        searching: true,
+        columnDefs: [{ orderable: false, targets: 0 }]
+      });
+
+      $('#attrTable tbody').on('click', 'tr', function() {
+        const rowid = parseInt($(this).data('rowid'));
+        if (activeLayerKey && geojsonCache[activeLayerKey]) {
+          const layer = leafletLayers[activeLayerKey].getLayers().find(l => l.feature.properties._rowid === rowid);
+          if (layer) highlightFeature(activeLayerKey, layer, rowid);
+        }
+      });
+
+      $('#attrTable tbody').on('change', '.row-select', function() {
+        const rowid = parseInt($(this).closest('tr').data('rowid'));
+        if (!selectedRows[activeLayerKey]) selectedRows[activeLayerKey] = new Set();
+        
+        if (this.checked) {
+          selectedRows[activeLayerKey].add(rowid);
+          $(this).closest('tr').addClass('selected-row');
+        } else {
+          selectedRows[activeLayerKey].delete(rowid);
+          $(this).closest('tr').removeClass('selected-row');
+        }
+        updateSelectionButtons();
+      });
+
+      $('#selectAll').on('click', function() {
+        const isChecked = this.checked;
+        $('.row-select').prop('checked', isChecked).trigger('change');
+      });
+      
+    }).fail(() => {
+      $('#tableArea').html('<div class="alert alert-danger">Failed to fetch layer attributes.</div>');
+    });
+  }
+
+  function updateSelectionButtons() {
+    const hasSelection = selectedRows[activeLayerKey] && selectedRows[activeLayerKey].size > 0;
+    $('#createSelectionLayerBtn, #downloadSelectionBtn').prop('disabled', !hasSelection);
+  }
+
+  function createSelectionLayer(baseLayerKey, selectedRowids) {
+    fetch('/create_selection_layer', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({layer: baseLayerKey, selected: selectedRowids})
+    }).then(resp => resp.json()).then(data => {
+      if (data.error) {
+        alert(`Error creating selection layer: ${data.error}`);
+      } else {
+        alert(data.success);
+        LAYERS[data.layer_name] = { 'title': data.title, 'color': data.color, 'type': data.type };
+        addLayerToMap(data.layer_name, true);
+        buildLayerList();
+      }
+    }).catch(err => {
+      alert('Failed to create selection layer.');
+    });
+  }
+  
+  function downloadLayer(layerKey, selectedRowids) {
+    fetch(`/download/${layerKey}`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ selected_rowids: selectedRowids })
+    }).then(resp => {
+      if (resp.ok) return resp.blob();
+      return resp.json().then(error => Promise.reject(error));
+    }).then(blob => {
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      a.download = `${layerKey}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      a.remove();
+    }).catch(err => {
+      alert(`Download failed: ${err.error || 'Unknown error'}`);
+    });
+  }
+
+  function deleteLayer(layerKey) {
+    fetch(`/delete_layer/${layerKey}`, {
+      method: 'DELETE'
+    }).then(resp => resp.json()).then(data => {
+      if (data.error) {
+        alert(`Error deleting layer: ${data.error}`);
+      } else {
+        alert(data.success);
+        if (leafletLayers[layerKey]) {
+          map.removeLayer(leafletLayers[layerKey]);
+          delete leafletLayers[layerKey];
+        }
+        delete LAYERS[layerKey];
+        if (layerKey === activeLayerKey) {
+          activeLayerKey = null;
+          $('#tableArea').html('<p class="text-muted">Select a layer to view its data.</p>');
+        }
+        buildLayerList();
+        $('#deleteModal').modal('hide');
+      }
+    }).catch(err => {
+      alert('Failed to connect to server to delete layer.');
+    });
+  }
+  
+  function mergeLayers(layer_names) {
+    fetch('/merge_layers', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ layers: layer_names })
+    }).then(resp => resp.json()).then(data => {
+      if (data.error) {
+        alert(`Error merging layers: ${data.error}`);
+      } else {
+        alert(data.success);
+        window.location.reload();
+      }
+    }).catch(err => {
+      alert('Failed to merge layers.');
+    });
+  }
+
+  // --- Event Listeners ---
+  $(document).ready(() => {
+    buildLayerList();
+    if (Object.keys(LAYERS).length > 0) {
+      Object.keys(LAYERS).forEach(key => addLayerToMap(key));
+    } else {
+      $('#layersList').html('<p class="loading-message">No layers available.</p>');
+    }
+
+    $(document).on('change', '.layer-toggle', function() {
+      const key = $(this).data('key');
+      if ($(this).is(':checked')) {
+        if (leafletLayers[key]) map.addLayer(leafletLayers[key]);
+        else addLayerToMap(key);
+      } else {
+        if (leafletLayers[key]) map.removeLayer(leafletLayers[key]);
+        if (key === activeLayerKey) $('#tableArea').html('<p class="text-muted">Select a layer to view its data.</p>');
+      }
+    });
+
+    $(document).on('change', '.color-input', function() {
+      const key = $(this).data('key');
+      const newColor = $(this).val();
+      LAYERS[key].color = newColor;
+      if (leafletLayers[key]) {
+        leafletLayers[key].eachLayer(layer => {
+          layer.setStyle(getLayerStyle(key));
+        });
+      }
+    });
+
+    $(document).on('click', '.zoom-to-layer', function() {
+      const key = $(this).data('key');
+      if (!leafletLayers[key]) return;
+      map.fitBounds(leafletLayers[key].getBounds(), {padding: [20, 20]});
+    });
+
+    $(document).on('click', '.view-attributes', function() {
+      const key = $(this).data('key');
+      activeLayerKey = key;
+      loadAttributeTable(key);
+    });
+
+    $('#createSelectionLayerBtn').click(() => {
+      if (!activeLayerKey || !selectedRows[activeLayerKey] || selectedRows[activeLayerKey].size === 0) {
+        return alert('No features selected to create a layer.');
+      }
+      const selected = Array.from(selectedRows[activeLayerKey]);
+      createSelectionLayer(activeLayerKey, selected);
+    });
+    
+    $('#downloadSelectionBtn').click(() => {
+      if (!activeLayerKey || !selectedRows[activeLayerKey] || selectedRows[activeLayerKey].size === 0) {
+        return alert('No features selected to download.');
+      }
+      const selected = Array.from(selectedRows[activeLayerKey]);
+      downloadLayer(activeLayerKey, selected);
+    });
+    
+    $('#mergeLayersBtn').click(() => {
+      const layersToMerge = [];
+      $('.layer-merge-toggle:checked').each(function() {
+        layersToMerge.push($(this).data('key'));
+      });
+
+      if (layersToMerge.length < 2) {
+        alert('Please select at least two layers to merge.');
+        return;
+      }
+      mergeLayers(layersToMerge);
+    });
+    
+    $('#refreshLayersBtn').click(() => {
+        window.location.reload();
+    });
+
+    let layerToDeleteKey = null;
+    $(document).on('click', '.delete-layer-btn', function() {
+      layerToDeleteKey = $(this).data('key');
+      $('#deleteLayerName').text(LAYERS[layerToDeleteKey].title);
+    });
+
+    $('#confirmDeleteBtn').click(() => {
+      if (layerToDeleteKey) {
+        deleteLayer(layerToDeleteKey);
+      }
+    });
+
+    $('#uploadForm').submit(function(e){
+      e.preventDefault();
+      $('#uploadStatus').html('');
+      const formData = new FormData(this);
+      $.ajax({
+        url: '/upload',
+        type: 'POST',
+        data: formData,
+        processData: false,
+        contentType: false,
+        success: res => {
+          if (res.error) {
+            $('#uploadStatus').html('<div class="alert alert-danger">'+res.error+'</div>');
+          } else {
+            $('#uploadStatus').html('<div class="alert alert-success">'+res.success+'</div>');
+            window.location.reload();
+          }
+        },
+        error: xhr => {
+          $('#uploadStatus').html('<div class="alert alert-danger">Upload failed: '+ (xhr.responseJSON?.error || xhr.statusText) +'</div>');
+        }
+      });
+    });
+  });
+</script>
+</body>
+</html>
