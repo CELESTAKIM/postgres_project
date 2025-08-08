@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Kenya GIS Portal</title>
+
+    <!-- Bootstrap CSS (CDN) -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+
+    <!-- DataTables CSS -->
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css"/>
+
+    <style>
+        body { margin: 0; font-family: Arial, Helvetica, sans-serif; }
+        #map { height: calc(100vh - 56px); } /* space for top navbar */
+        .sidebar { height: calc(100vh - 56px); overflow: auto; padding: 10px; background: #f8f9fa; }
+        .layer-card { margin-bottom: 10px; }
+        .dt-container { margin-top: 10px; }
+        .highlighted { outline: 4px solid yellow; }
+        .swatch { width:18px; height:18px; display:inline-block; margin-left:6px; border:1px solid #333; vertical-align:middle; }
+        .small-muted { font-size: 0.9rem; color: #666; }
+        .table-responsive { max-height: 55vh; overflow:auto; }
+        .filter-input { width: 100%; box-sizing: border-box; padding:3px; }
+    </style>
+</head>
+<body>
+    <!-- Top navbar -->
+    <nav class="navbar navbar-expand-lg navbar-light bg-light" style="height:56px;">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="#">Kenya GIS Portal</a>
+            <div class="d-flex gap-2">
+                <button id="downloadBtn" class="btn btn-primary btn-sm">Download Selected (SHP)</button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="d-flex">
+        <!-- Sidebar -->
+        <div class="col-4 sidebar">
+            <h5>Layers</h5>
+            <div id="layersList"></div>
+
+            <hr>
+            <h6>Attribute Table</h6>
+            <div id="tableArea">
+                <p class="text-muted">Select a layer to view its attribute table.</p>
+            </div>
+        </div>
+
+        <!-- Map -->
+        <div class="col-8 p-0">
+            <div id="map"></div>
+        </div>
+    </div>
+
+    <!-- JS libs -->
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- DataTables -->
+    <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
+
+    <script>
+    // LAYERS passed from Flask
+    const LAYERS = {{ layers | tojson }};
+
+    // Map init
+    const map = L.map('map').setView([0.0236, 37.9062], 6);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+    // Hold Leaflet layer groups and geojson objects
+    const leafletLayers = {};
+    const geojsonCache = {}; // stores fetched geojson objects for tables and downloads
+    let activeLayerKey = null;
+    let highlightedFeature = null;
+
+    // Build layer list in sidebar
+    const layersList = document.getElementById('layersList');
+    for (const key in LAYERS) {
+        const info = LAYERS[key];
+        const card = document.createElement('div');
+        card.className = 'card layer-card';
+        card.innerHTML = `
+            <div class="card-body p-2">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <input type="checkbox" class="layer-toggle" data-key="${key}" checked> 
+                        <strong>${info.title}</strong><span class="swatch" style="background:${info.color}"></span>
+                        <div class="small-muted">${info.type.toUpperCase()}</div>
+                    </div>
+                    <div>
+                        <button class="btn btn-sm btn-outline-primary view-attributes" data-key="${key}">View Attributes</button>
+                        <button class="btn btn-sm btn-outline-secondary zoom-to-layer" data-key="${key}">Zoom</button>
+                    </div>
+                </div>
+            </div>
+        `;
+        layersList.appendChild(card);
+    }
+
+    // Fetch & add layers to map
+    async function loadAllLayers() {
+        for (const key of Object.keys(LAYERS)) {
+            await loadLayer(key);
+        }
+    }
+
+    async function loadLayer(key) {
+        try {
+            const res = await fetch(`/data/${key}`);
+            if (!res.ok) { console.warn('Layer not found:', key); return; }
+            const gj = await res.json();
+            geojsonCache[key] = gj;
+
+            const style = getStyleForKey(key);
+            const onEach = (feature, layer) => {
+                // Popup with some attributes (first 10)
+                const props = feature.properties || {};
+                const keys = Object.keys(props).filter(k => k !== 'geom' && k !== '_rowid');
+                let html = '<div style="max-height:200px;overflow:auto;">';
+                keys.slice(0,10).forEach(k => { html += `<b>${k}:</b> ${props[k]}<br>`; });
+                html += '</div>';
+                layer.bindPopup(html);
+                // store row id on layer for mapping to table
+                layer._rowid = props._rowid;
+            };
+
+            let ly;
+            if (LAYERS[key].type === 'point') {
+                ly = L.geoJSON(gj, {
+                    pointToLayer: (feature, latlng) => {
+                        // nicer symbol for points — circle with border
+                        return L.circleMarker(latlng, {
+                            radius: 6,
+                            fillColor: LAYERS[key].color,
+                            color: "#222",
+                            weight: 1,
+                            opacity: 1,
+                            fillOpacity: 0.95
+                        });
+                    },
+                    onEachFeature: onEach
+                }).addTo(map);
+            } else {
+                ly = L.geoJSON(gj, {
+                    style: (f) => ({
+                        color: LAYERS[key].color,
+                        weight: key === 'adm0' ? 3 : 1.5,
+                        fillOpacity: key === 'adm0' ? 0 : 0.25
+                    }),
+                    onEachFeature: onEach
+                }).addTo(map);
+            }
+
+            leafletLayers[key] = ly;
+        } catch (err) {
+            console.error('Failed to load layer', key, err);
+        }
+    }
+
+    function getStyleForKey(key) {
+        return { color: LAYERS[key].color };
+    }
+
+    // Toggle layers on checkbox change
+    $(document).on('change', '.layer-toggle', function() {
+        const key = $(this).data('key');
+        const checked = $(this).is(':checked');
+        if (leafletLayers[key]) {
+            if (checked) map.addLayer(leafletLayers[key]);
+            else map.removeLayer(leafletLayers[key]);
+        }
+    });
+
+    // Zoom to layer
+    $(document).on('click', '.zoom-to-layer', function() {
+        const key = $(this).data('key');
+        const ly = leafletLayers[key];
+        if (ly) {
+            try {
+                map.fitBounds(ly.getBounds(), { padding: [20,20] });
+            } catch(e) {
+                console.warn('fitBounds failed for', key, e);
+            }
+        }
+    });
+
+    // View attributes
+    $(document).on('click', '.view-attributes', async function() {
+        const key = $(this).data('key');
+        activeLayerKey = key;
+        await showAttributeTable(key);
+    });
+
+    // Show attribute table using DataTables with column filters
+    async function showAttributeTable(key) {
+        const area = document.getElementById('tableArea');
+        area.innerHTML = '<p>Loading table...</p>';
+        try {
+            const res = await fetch(`/attributes/${key}`);
+            if (!res.ok) {
+                area.innerHTML = '<p class="text-danger">Attributes not available.</p>';
+                return;
+            }
+            const data = await res.json();
+            const cols = data.columns.filter(c => c !== 'geom'); // hide geom column
+            const rows = data.rows;
+
+            // Build table with filter inputs in header
+            let tableHtml = `<div class="table-responsive"><table id="attrTable" class="table table-striped table-sm"><thead><tr>
+                <th style="width:40px">Select</th>`;
+            cols.forEach(c => tableHtml += `<th>${c}</th>`);
+            tableHtml += `</tr><tr class="filters"><th></th>`;
+            cols.forEach(c => tableHtml += `<th><input class="filter-input" data-col="${c}" placeholder="filter ${c}"></th>`);
+            tableHtml += `</tr></thead><tbody>`;
+            rows.forEach(r => {
+                tableHtml += `<tr data-rowid="${r._rowid}"><td><input class="row-select" type="checkbox" /></td>`;
+                cols.forEach(c => tableHtml += `<td>${escapeHtml(r[c])}</td>`);
+                tableHtml += `</tr>`;
+            });
+            tableHtml += `</tbody></table></div>`;
+            area.innerHTML = tableHtml;
+
+            // Initialize DataTable
+            const dt = $('#attrTable').DataTable({
+                pageLength: 10,
+                lengthChange: true,
+                order: []
+            });
+
+            // Apply column filtering (simple)
+            $('#attrTable thead').on('keyup change', '.filter-input', function() {
+                const colName = $(this).data('col');
+                const idx = cols.indexOf(colName);
+                if (idx >= 0) {
+                    dt.column(idx + 1).search(this.value).draw(); // +1 because first column is Select
+                }
+            });
+
+            // row click: highlight on map & open popup
+            $('#attrTable tbody').off('click').on('click', 'tr', function (e) {
+                // avoid click if user clicked the checkbox
+                if ($(e.target).is('input')) return;
+                const rowid = parseInt($(this).data('rowid'));
+                highlightFeatureByRowId(activeLayerKey, rowid);
+            });
+
+            // scroll map to top
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+
+        } catch (err) {
+            area.innerHTML = '<p class="text-danger">Failed to load attributes.</p>';
+            console.error(err);
+        }
+    }
+
+    function escapeHtml(unsafe) {
+        if (unsafe === null || unsafe === undefined) return '';
+        return String(unsafe)
+            .replaceAll('&', "&amp;")
+            .replaceAll('<', "&lt;")
+            .replaceAll('>', "&gt;");
+    }
+
+    // Highlight feature by _rowid (index)
+    function highlightFeatureByRowId(layerKey, rowid) {
+        if (!leafletLayers[layerKey]) return;
+        let found = null;
+        leafletLayers[layerKey].eachLayer(function(l) {
+            if (l._rowid === rowid) found = l;
+        });
+        if (!found) {
+            alert("Feature not found on map (it may be filtered out).");
+            return;
+        }
+        // clear previous highlight
+        if (highlightedFeature) {
+            try {
+                if (highlightedFeature.setStyle) highlightedFeature.setStyle({ weight: 1 });
+            } catch(e){}
+        }
+        // apply highlight
+        if (found.setStyle) {
+            found.setStyle({ weight: 4, color: '#ffff00' });
+        } else if (found.openPopup) {
+            // for markers: open popup and set view
+        }
+        try {
+            const bounds = found.getBounds ? found.getBounds() : L.latLngBounds(found.getLatLng(), found.getLatLng());
+            map.fitBounds(bounds, { padding: [30,30] });
+        } catch(e){
+            try { map.setView(found.getLatLng(), 12); } catch(e){}
+        }
+        found.openPopup();
+        highlightedFeature = found;
+    }
+
+    // Download selected features as zipped Shapefile
+    document.getElementById('downloadBtn').addEventListener('click', async () => {
+        if (!activeLayerKey) { alert('Select a layer and open its attribute table first.'); return; }
+        // collect selected rowids
+        const selected = [];
+        $('#attrTable tbody tr').each(function() {
+            const cb = $(this).find('.row-select');
+            if (cb.prop('checked')) {
+                selected.push(parseInt($(this).data('rowid')));
+            }
+        });
+        if (!selected.length) { alert('No rows selected for download.'); return; }
+
+        try {
+            const res = await fetch('/download', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ layer: activeLayerKey, selected })
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                alert('Download failed: ' + (err.error || res.statusText));
+                return;
+            }
+            const blob = await res.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = (activeLayerKey + '_selection.zip');
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+        } catch (err) {
+            console.error(err);
+            alert('Download error: ' + err);
+        }
+    });
+
+    // Initial load
+    loadAllLayers();
+    </script>
+</body>
+</html>
